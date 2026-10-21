@@ -39,3 +39,22 @@ yarn-error.log*
 # typescript
 *.tsbuildinfo
 next-env.d.ts
+
+# Local backups and audit artifacts
+*.backup
+*.backup-*
+*.bak
+*.diagnostic-backup
+/audit-v*.ps1
+/backtest-v*.ps1
+/backtest-v*-results.csv
+/backtest-v*-summary.txt
+/fix-row*.ps1
+/import-match-stats.ps1*
+/UCL-2025-Team-Stats-audit-final.xlsx
+/goalpredict-ucl-match-audit-final.csv
+/data/*audit*.json
+/data/*review*.json
+/data/*warnings*.txt
+/data/*backup*.json
+/data/*audit*.csv
