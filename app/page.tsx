@@ -1,5 +1,4 @@
 "use client";
-
 import { useCallback, useEffect, useState } from "react";
 
 type Match = {
@@ -421,9 +420,27 @@ const matches = (data?.matches ?? []).filter((match) => {
               </p>
             </div>
           </div>
-          <span className="rounded-full border border-emerald-400/30 px-3 py-1.5 text-xs text-emerald-300">
-            API mode
-          </span>
+          <div className="flex items-center gap-2">
+
+            <a
+
+              href="/history"
+
+              className="rounded-full border border-emerald-400/40 px-3 py-1.5 text-xs font-semibold text-emerald-300 transition hover:bg-emerald-400/10"
+
+            >
+
+              Statistik
+
+            </a>
+
+            <span className="rounded-full border border-emerald-400/30 px-3 py-1.5 text-xs text-emerald-300">
+
+              API mode
+
+            </span>
+
+          </div>
         </div>
       </header>
 
