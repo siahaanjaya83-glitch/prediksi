@@ -1,8 +1,9 @@
-import { NextRequest, NextResponse } from "next/server";
+﻿import { NextRequest, NextResponse } from "next/server";
 import generalData from "../../../data/match-stats.json";
 import europeanData from "../../../data/european-match-stats-v2.json";
+import football2026Data from "../../../data/football-2026-results.json";
 type Row = Record<string, unknown>;
-type Source = "general" | "uefa";
+type Source = "general" | "uefa" | "open-matchday";
 
 type Match = {
   id: string;
@@ -96,10 +97,63 @@ function normalize(input: unknown, source: Source): Match[] {
   });
 }
 
-const all: Match[] = [
+const normalizedRows: Match[] = [
   ...normalize(generalData, "general"),
   ...normalize(europeanData, "uefa"),
-].sort((a, b) => b.date.localeCompare(a.date));
+  ...normalize(football2026Data, "open-matchday"),
+];
+
+function matchKey(m: Match): string {
+  const clean = (s: string) => s
+    .normalize("NFD")
+    .replace(/[\u0300-\u036f]/g, "")
+    .toLocaleLowerCase()
+    .replace(/[^a-z0-9]/g, "");
+
+  return [
+    m.date.slice(0, 10),
+    clean(m.home),
+    clean(m.away),
+  ].join("|");
+}
+
+const uniqueMatches = new Map<string, Match>();
+
+for (const current of normalizedRows) {
+  const key = matchKey(current);
+  const existing = uniqueMatches.get(key);
+
+  if (!existing) {
+    uniqueMatches.set(key, current);
+    continue;
+  }
+
+  // Pertahankan skor dan identitas sumber yang sudah ada.
+  // Isi statistik yang kosong hanya jika sumber lain memilikinya.
+  const merged = { ...existing };
+
+  const statKeys: (keyof Match)[] = [
+    "homeShots", "awayShots",
+    "homeShotsOnTarget", "awayShotsOnTarget",
+    "homeCorners", "awayCorners",
+    "homePossession", "awayPossession",
+    "homeXg", "awayXg",
+    "homeFouls", "awayFouls",
+    "homeYellowCards", "awayYellowCards",
+    "homeRedCards", "awayRedCards",
+  ];
+
+  for (const statKey of statKeys) {
+    if (merged[statKey] === null && current[statKey] !== null) {
+      (merged[statKey] as number | null) = current[statKey] as number;
+    }
+  }
+
+  uniqueMatches.set(key, merged);
+}
+
+const all: Match[] = [...uniqueMatches.values()]
+  .sort((a, b) => b.date.localeCompare(a.date));
 
 function sum(values: (number | null)[]) {
   const present = values.filter((v): v is number => v !== null);

@@ -131,7 +131,7 @@ export default function HistoryPage() {
       <h2 className="mb-4 text-xl font-bold">Filter data historis</h2>
       <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
         <label className="text-sm">Dataset<select className={field} value={source} onChange={e => { setSource(e.target.value); setLeague(""); setSeason(""); resetPage(); }}>
-          <option value="all">Semua dataset</option><option value="general">Statistik umum</option><option value="uefa">UEFA</option>
+          <option value="all">Semua dataset</option><option value="general">Statistik umum</option><option value="uefa">UEFA</option><option value="open-matchday">Open Matchday (hasil 2026)</option>
         </select></label>
         <label className="text-sm">Kompetisi<select className={field} value={league} onChange={e => { setLeague(e.target.value); resetPage(); }}>
           <option value="">Semua kompetisi</option>{(data?.competitions ?? []).map(x => <option key={x}>{x}</option>)}
