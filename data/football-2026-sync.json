@@ -1,11 +1,11 @@
 {
   "source": "Open Matchday",
   "sourceUrl": "https://github.com/oladeeayo/open-matchday",
-  "updatedAt": "2026-10-26T06:46:47.207Z",
+  "updatedAt": "2026-10-27T06:40:01.923Z",
   "competitionsDetected": 63,
-  "downloadedResults": 4679,
-  "totalResults": 4737,
-  "downloadedFixtures": 8646,
-  "totalFixtures": 8973,
+  "downloadedResults": 4695,
+  "totalResults": 4755,
+  "downloadedFixtures": 8629,
+  "totalFixtures": 8997,
   "errors": []
 }
