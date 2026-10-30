@@ -91,11 +91,19 @@ type PreMatchResult = {
     under2_5Goals: number;
   };
   sampleSize: {
-    leagueMatches: number;
-    homeTeamMatches: number;
-    awayTeamMatches: number;
+    competitionMatches?: number;
+    leagueMatches?: number;
+    homeMatchesAvailable?: number;
+    awayMatchesAvailable?: number;
+    homeMatchesUsed?: number;
+    awayMatchesUsed?: number;
+    homeTeamMatches?: number;
+    awayTeamMatches?: number;
+
   };
-  teamStatistics?: Record<string, unknown>;
+  predictionCutoff?: string;
+  latestHistoricalMatchDate?: string | null;
+  dataCutoff?: string;
   disclaimer: string;
 };
 
@@ -797,7 +805,9 @@ const matches = (data?.matches ?? []).filter((match) => {
                 <div>
                   <p className="text-sm text-slate-400">Sampel historis</p>
                   <p className="mt-1 text-2xl font-black">{preResult.sampleSize.leagueMatches}</p>
-                  <p className="mt-1 text-xs text-slate-400">Pertandingan liga sebelum kickoff</p>
+                  <p className="mt-1 text-xs text-slate-400">
+                    Pertandingan kompetisi sebelum tanggal kickoff
+                  </p>
                 </div>
               </div>
 
@@ -819,17 +829,32 @@ const matches = (data?.matches ?? []).filter((match) => {
                 </div>
               </div>
 
-              <p className="mt-5 text-xs leading-5 text-slate-400">
-                Metode: {preResult.method}. Data: {preResult.source}.
-                Sampel kandang {preResult.sampleSize.homeTeamMatches} laga; sampel tandang {preResult.sampleSize.awayTeamMatches} laga.
+              <div className="mt-5 space-y-2 text-xs leading-5 text-slate-400">
+                <p>
+                  Metode: {preResult.method}. Dataset: {preResult.source}.
+                </p>
+                <p>
+                  Sampel kompetisi: {preResult.sampleSize.competitionMatches} laga.
+                  Sampel kandang yang digunakan: {preResult.sampleSize.homeMatchesUsed} laga.
+                  Sampel tandang yang digunakan: {preResult.sampleSize.awayMatchesUsed} laga.
+                </p>
+                <p>
+                  Batas tanggal prediksi: {preResult.predictionCutoff ?? preResult.dataCutoff ?? "Tidak tersedia"}.
+                </p>
+                <p>
+                  Pertandingan historis terakhir yang digunakan: {preResult.latestHistoricalMatchDate ?? "Tidak tersedia"}.
+                </p>
+              </div>
+              <p className="mt-3 rounded-xl border border-amber-400/20 bg-amber-400/5 p-3 text-xs leading-5 text-amber-100">
+                {preResult.disclaimer}
               </p>
-              <p className="mt-2 text-xs leading-5 text-slate-500">{preResult.disclaimer}</p>
             </div>
           )}
 
           <p className="mt-5 text-xs leading-5 text-slate-500">
-            Data Liga Champions dan Liga Europa belum tersedia dalam dataset statistik lokal saat ini.
-            Jangan gunakan prediksi ini sebagai kepastian hasil pertandingan.
+            Statistik teknis seperti xG, penguasaan bola, tembakan, sepak pojok,
+            dan kartu tidak digunakan jika nilainya tidak tersedia dalam dataset.
+            Prediksi bukan kepastian hasil pertandingan.
           </p>
         </section>
         <footer className="mt-8 border-t border-white/10 pt-4 text-xs leading-6 text-slate-500">
