@@ -1,111 +1,6 @@
 "use client";
-import { useCallback, useEffect, useState } from "react";
 
-type Match = {
-  id: number;
-  league: string;
-  country: string;
-  home: string;
-  away: string;
-  homeLogo: string;
-  awayLogo: string;
-  homeScore: number | null;
-  awayScore: number | null;
-  status: string;
-  statusText: string;
-  elapsed: number | null;
-  date: string;
-  venue: string;
-};
-
-type Result = {
-  mode: string;
-  total: number;
-  matches: Match[];
-  error?: string;
-  details?: unknown;
-  updatedAt?: string;
-  quota?: { remaining: string | null; limit: string | null };
-};
-
-type PredictionData = {
-  fixtureId: number;
-  teams: { home: string; away: string };
-  league: string;
-  predictions: {
-    winner: string | null;
-    advice: string | null;
-    goals: { home?: string | null; away?: string | null };
-    probabilities: { home?: string; draw?: string; away?: string };
-    form: { home?: string; away?: string };
-    attack: { home?: string; away?: string };
-    defense: { home?: string; away?: string };
-  };
-  updatedAt: string;
-  source: string;
-  note: string;
-};
-type GoalPrediction = {
-  fixtureId: number;
-  finished: boolean;
-  match?: {
-    elapsed: number;
-    remainingMinutes: number;
-    score: { home: number; away: number };
-  };
-  additionalGoals?: {
-    expectedHome: number;
-    expectedAway: number;
-    expectedTotal: number;
-  };
-  mostLikelyScore?: { home: number; away: number };
-  totalAdditionalGoalsProbability?: {
-    zero: string;
-    one: string;
-    twoOrMore: string;
-  };
-  inputs?: {
-    liveStatisticsAvailable: boolean;
-  };
-  score?: { home: number; away: number };
-  message?: string;
-  error?: string;
-  detail?: string;
-  note?: string;
-};
-
-type PreMatchResult = {
-  available: boolean;
-  source: string;
-  method: string;
-  league: string;
-  kickoff: string;
-  teams: { home: string; away: string };
-  expectedGoals: { home: number; away: number };
-  mostLikelyScore: { home: number; away: number; probability: number };
-  topScores: Array<{ score: string; probability: number }>;
-  probabilities: {
-    homeWin: number;
-    draw: number;
-    awayWin: number;
-    under2_5Goals: number;
-  };
-  sampleSize: {
-    competitionMatches?: number;
-    leagueMatches?: number;
-    homeMatchesAvailable?: number;
-    awayMatchesAvailable?: number;
-    homeMatchesUsed?: number;
-    awayMatchesUsed?: number;
-    homeTeamMatches?: number;
-    awayTeamMatches?: number;
-
-  };
-  predictionCutoff?: string;
-  latestHistoricalMatchDate?: string | null;
-  dataCutoff?: string;
-  disclaimer: string;
-};
+import { useEffect, useMemo, useState } from "react";
 
 type PreMatchLeague = {
   name: string;
@@ -113,308 +8,473 @@ type PreMatchLeague = {
   matches: number;
   teams: string[];
 };
-const liveStatuses = ["1H", "HT", "2H", "ET", "BT", "P", "LIVE"];
 
-function score(value: number | null) {
-  return value === null || value === undefined ? "-" : value;
+type ScoreItem = {
+  score: string;
+  probability: number;
+};
+
+type PreMatchResult = {
+  league: string;
+  source: string;
+  method: string;
+  kickoff: string;
+  teams: {
+    home: string;
+    away: string;
+  };
+  expectedGoals: {
+    home: number;
+    away: number;
+  };
+  mostLikelyScore: {
+    home: number;
+    away: number;
+    probability: number;
+  };
+  topScores: ScoreItem[];
+  probabilities: {
+    homeWin: number;
+    draw: number;
+    awayWin: number;
+    under2_5Goals: number | null;
+  };
+  sampleSize: {
+    competition: number;
+    homeAvailable: number;
+    awayAvailable: number;
+    homeUsed: number;
+    awayUsed: number;
+  };
+  predictionCutoff: string;
+  latestHistoricalMatchDate: string | null;
+  disclaimer: string;
+};
+
+type RawObject = Record<string, unknown>;
+
+const card =
+  "rounded-2xl border border-white/10 bg-[#111a2b] p-5";
+
+const field =
+  "mt-2 w-full rounded-xl border border-white/10 bg-[#111a2b] px-3 py-3 text-white outline-none focus:border-emerald-400";
+
+function numberValue(value: unknown, fallback = 0): number {
+  const result = Number(value);
+  return Number.isFinite(result) ? result : fallback;
+}
+
+function probabilityPercent(value: unknown): number {
+  const n = numberValue(value);
+  return Number((n <= 1 ? n * 100 : n).toFixed(2));
+}
+
+function poissonProbability(lambda: number, goals: number): number {
+  let probability = Math.exp(-lambda);
+
+  for (let i = 1; i <= goals; i++) {
+    probability *= lambda / i;
+  }
+
+  return probability;
+}
+
+function goalMarkets(homeLambda: number, awayLambda: number) {
+  const maxGoals = 20;
+  const homeDistribution = Array.from(
+    { length: maxGoals + 1 },
+    (_, goals) => poissonProbability(homeLambda, goals)
+  );
+  const awayDistribution = Array.from(
+    { length: maxGoals + 1 },
+    (_, goals) => poissonProbability(awayLambda, goals)
+  );
+
+  let under15 = 0;
+  let under25 = 0;
+  let under35 = 0;
+  let btts = 0;
+
+  for (let home = 0; home <= maxGoals; home++) {
+    for (let away = 0; away <= maxGoals; away++) {
+      const p = homeDistribution[home] * awayDistribution[away];
+      const total = home + away;
+
+      if (total <= 1) under15 += p;
+      if (total <= 2) under25 += p;
+      if (total <= 3) under35 += p;
+      if (home > 0 && away > 0) btts += p;
+    }
+  }
+
+  return {
+    over15: (1 - under15) * 100,
+    under15: under15 * 100,
+    over25: (1 - under25) * 100,
+    under25: under25 * 100,
+    over35: (1 - under35) * 100,
+    under35: under35 * 100,
+    btts: btts * 100,
+    noBtts: (1 - btts) * 100,
+  };
+}
+
+function normalizeResult(raw: RawObject): PreMatchResult {
+  const expected = raw.expectedGoals as RawObject;
+  const teams = (
+    (raw.teams as RawObject | undefined) ?? {
+      home: raw.home,
+      away: raw.away,
+    }
+  ) as RawObject;
+
+  const probabilities = raw.probabilities as RawObject;
+  const sample = (
+    (raw.sampleSize as RawObject | undefined) ?? {}
+  );
+
+  const rawTopScores = Array.isArray(raw.topScores)
+    ? raw.topScores as RawObject[]
+    : [];
+
+  const mostLikely = raw.mostLikelyScore as RawObject;
+
+  const homeLambda = numberValue(expected.home);
+  const awayLambda = numberValue(expected.away);
+
+  const rawMostLikelyProbability = numberValue(
+    mostLikely.probability
+  );
+
+  const scoreProbability = rawMostLikelyProbability <= 1
+    ? rawMostLikelyProbability * 100
+    : rawMostLikelyProbability;
+
+  const topScores = rawTopScores.map((item) => {
+    const rawProbability = numberValue(item.probability);
+
+    return {
+      score: typeof item.score === "string"
+        ? item.score
+        : `${item.home}-${item.away}`,
+      probability: Number(
+        (rawProbability <= 1
+          ? rawProbability * 100
+          : rawProbability).toFixed(2)
+      ),
+    };
+  });
+
+  return {
+    league: String(raw.league ?? ""),
+    source: String(raw.source ?? ""),
+    method: String(raw.method ?? ""),
+    kickoff: String(raw.kickoff ?? ""),
+    teams: {
+      home: String(teams.home ?? ""),
+      away: String(teams.away ?? ""),
+    },
+    expectedGoals: {
+      home: homeLambda,
+      away: awayLambda,
+    },
+    mostLikelyScore: {
+      home: numberValue(mostLikely.home),
+      away: numberValue(mostLikely.away),
+      probability: Number(scoreProbability.toFixed(2)),
+    },
+    topScores,
+    probabilities: {
+      homeWin: probabilityPercent(
+        probabilities.homeWin ?? probabilities.home
+      ),
+      draw: probabilityPercent(probabilities.draw),
+      awayWin: probabilityPercent(
+        probabilities.awayWin ?? probabilities.away
+      ),
+      under2_5Goals:
+        probabilities.under2_5Goals == null
+          ? null
+          : probabilityPercent(probabilities.under2_5Goals),
+    },
+    sampleSize: {
+      competition: numberValue(
+        sample.competitionMatches ??
+        sample.leagueMatchesBeforeKickoff ??
+        raw.historyMatches
+      ),
+      homeAvailable: numberValue(
+        sample.homeMatchesAvailable ??
+        sample.homeVenueMatchesAvailable ??
+        sample.homeVenueMatches
+      ),
+      awayAvailable: numberValue(
+        sample.awayMatchesAvailable ??
+        sample.awayVenueMatchesAvailable ??
+        sample.awayVenueMatches
+      ),
+      homeUsed: numberValue(
+        sample.homeMatchesUsed ??
+        sample.homeVenueMatchesUsed ??
+        sample.homeVenueMatches
+      ),
+      awayUsed: numberValue(
+        sample.awayMatchesUsed ??
+        sample.awayVenueMatchesUsed ??
+        sample.awayVenueMatches
+      ),
+    },
+    predictionCutoff: String(
+      raw.predictionCutoff ?? raw.dataCutoff ?? raw.kickoff ?? ""
+    ).slice(0, 10),
+    latestHistoricalMatchDate:
+      typeof raw.latestHistoricalMatchDate === "string"
+        ? raw.latestHistoricalMatchDate
+        : null,
+    disclaimer: String(
+      raw.disclaimer ?? raw.note ??
+      "Prediksi merupakan estimasi statistik, bukan jaminan hasil."
+    ),
+  };
+}
+
+function Metric({
+  label,
+  value,
+  suffix = "%",
+}: {
+  label: string;
+  value: number;
+  suffix?: string;
+}) {
+  return (
+    <div className="rounded-xl border border-white/10 bg-black/20 p-4">
+      <p className="text-xs text-slate-400">{label}</p>
+      <p className="mt-2 text-2xl font-black tabular-nums">
+        {value.toFixed(2)}{suffix}
+      </p>
+    </div>
+  );
+}
+
+function ProbabilityBar({
+  label,
+  value,
+  color,
+}: {
+  label: string;
+  value: number;
+  color: string;
+}) {
+  return (
+    <div>
+      <div className="mb-2 flex justify-between gap-3 text-sm">
+        <span className="text-slate-300">{label}</span>
+        <strong>{value.toFixed(2)}%</strong>
+      </div>
+      <div className="h-2 overflow-hidden rounded-full bg-white/10">
+        <div
+          className={`h-full rounded-full ${color}`}
+          style={{ width: `${Math.max(0, Math.min(100, value))}%` }}
+        />
+      </div>
+    </div>
+  );
 }
 
 export default function Home() {
-  const [mode, setMode] = useState<"live" | "today">("live");
-  const [data, setData] = useState<Result | null>(null);
-  const [loading, setLoading] = useState(false);
-  const [error, setError] = useState("");
-  const [search, setSearch] = useState("");
-  const [predictions, setPredictions] = useState<Record<number, PredictionData>>({});
-  const [predictingId, setPredictingId] = useState<number | null>(null);
-  const [predictionErrors, setPredictionErrors] = useState<Record<number, string>>({});
-  const [goalPredictions, setGoalPredictions] = useState<Record<number, GoalPrediction>>({});
-  const [goalPredictingId, setGoalPredictingId] = useState<number | null>(null);
-  const [goalPredictionErrors, setGoalPredictionErrors] = useState<Record<number, string>>({});
-  const [goalAutoIds, setGoalAutoIds] = useState<Record<number, boolean>>({});
-  // pre-match-panel-v1
-  const [preLeagues, setPreLeagues] = useState<PreMatchLeague[]>([]);
-  const [preLeague, setPreLeague] = useState("English Premier League");
-  const [preHome, setPreHome] = useState("");
-  const [preAway, setPreAway] = useState("");
-  const [preKickoff, setPreKickoff] = useState(""); // PREKICKOFF_INIT_FIX
+  const [leagues, setLeagues] = useState<PreMatchLeague[]>([]);
+  const [league, setLeague] = useState("");
+  const [home, setHome] = useState("");
+  const [away, setAway] = useState("");
+  const [kickoff, setKickoff] = useState("");
   useEffect(() => {
     const date = new Date();
     date.setDate(date.getDate() + 1);
     date.setMinutes(0, 0, 0);
 
-    const localDate = new Date(
-      date.getTime() - date.getTimezoneOffset() * 60000
-    ).toISOString().slice(0, 16);
+    const pad = (value: number) => String(value).padStart(2, "0");
 
-    setPreKickoff(localDate);
+    const localKickoff =
+      `${date.getFullYear()}-${pad(date.getMonth() + 1)}-${pad(date.getDate())}` +
+      `T${pad(date.getHours())}:00`;
+
+    setKickoff(localKickoff);
   }, []);
-  const [preResult, setPreResult] = useState<PreMatchResult | null>(null);
-  const [preLoading, setPreLoading] = useState(false);
-  const [preError, setPreError] = useState("");
+
+  const [loadingOptions, setLoadingOptions] = useState(true);
+  const [loadingPrediction, setLoadingPrediction] = useState(false);
+  const [error, setError] = useState("");
+  const [result, setResult] = useState<PreMatchResult | null>(null);
 
   useEffect(() => {
-    let active = true;
-    fetch("/api/pre-match/options", { cache: "no-store" })
-      .then(async (response) => {
-        const result = await response.json();
-        if (!response.ok) throw new Error(result.error ?? "Pilihan tim gagal dimuat.");
-        return result as { leagues: PreMatchLeague[] };
-      })
-      .then((result) => {
-        if (!active) return;
-        setPreLeagues(result.leagues);
-        const first = result.leagues.find((league) => league.available);
-        if (first) {
-          setPreLeague(first.name);
-          setPreHome(first.teams[0] ?? "");
-          setPreAway(first.teams[1] ?? "");
-        }
-      })
-      .catch((error) => {
-        if (active) setPreError(error instanceof Error ? error.message : "Gagal memuat tim.");
-      });
-    return () => { active = false; };
-  }, []);
+    const controller = new AbortController();
 
-  const selectedPreLeague = preLeagues.find((league) => league.name === preLeague);
-  const preTeams = selectedPreLeague?.teams ?? [];
-
-  async function runPreMatchPrediction(event: React.FormEvent<HTMLFormElement>) {
-    event.preventDefault();
-    setPreLoading(true);
-    setPreError("");
-    setPreResult(null);
-
-    try {
-      const endpoint = preLeague.startsWith("UEFA ") ? "/api/european/pre-match" : "/api/pre-match";
-      const response = await fetch(endpoint, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        cache: "no-store",
-        body: JSON.stringify({
-          league: preLeague,
-          home: preHome,
-          away: preAway,
-          kickoff: new Date(preKickoff).toISOString(),
-        }),
-      });
-      const result = await response.json();
-      if (!response.ok) {
-        const detail = result.detail ? ` ${result.detail}` : "";
-        throw new Error(`${result.error ?? "Prediksi gagal."}${detail}`);
-      }
-      setPreResult(result as PreMatchResult);
-    } catch (error) {
-      setPreError(error instanceof Error ? error.message : "Prediksi gagal diproses.");
-    } finally {
-      setPreLoading(false);
-    }
-  }
-
-
-  const loadMatches = useCallback(async (selectedMode: "live" | "today") => {
-    setLoading(true);
-    setError("");
-
-    try {
-      const response = await fetch(`/api/live?mode=${selectedMode}`, {
-        cache: "no-store",
-      });
-      const result = await response.json();
-
-      if (!response.ok) {
-        throw new Error(
-          typeof result.details === "string"
-            ? `${result.error ?? "Gagal mengambil data"}: ${result.details}`
-            : result.error ?? "Gagal mengambil data pertandingan."
-        );
-      }
-
-      setData(result);
-    } catch (err) {
-      setError(err instanceof Error ? err.message : "Terjadi kesalahan.");
-      setData(null);
-    } finally {
-      setLoading(false);
-    }
-  }, []);
-
-  useEffect(() => {
-    let active = true;
-    let inFlight = false;
-
-    async function fetchMatches() {
-      if (inFlight || document.visibilityState === "hidden") return;
-
-      inFlight = true;
+    async function loadOptions() {
+      setLoadingOptions(true);
+      setError("");
 
       try {
-        const response = await fetch(`/api/live?mode=${mode}`, {
+        const response = await fetch("/api/pre-match/options", {
           cache: "no-store",
+          signal: controller.signal,
         });
 
-        const result = await response.json();
+        const payload = await response.json();
 
         if (!response.ok) {
           throw new Error(
-            typeof result.details === "string"
-              ? `${result.error ?? "Gagal mengambil data"}: ${result.details}`
-              : result.error ?? "Gagal mengambil data pertandingan."
+            payload.error ?? "Pilihan kompetisi gagal dimuat."
           );
         }
 
-        if (active) {
-          setData(result);
-          setError("");
+        const available = (payload.leagues ?? []) as PreMatchLeague[];
+        setLeagues(available);
+
+        const first = available.find((item) => item.available);
+
+        if (first) {
+          setLeague(first.name);
+          setHome(first.teams[0] ?? "");
+          setAway(first.teams[1] ?? "");
         }
       } catch (err) {
-        if (active) {
+        if (!controller.signal.aborted) {
           setError(
-            err instanceof Error ? err.message : "Terjadi kesalahan."
+            err instanceof Error
+              ? err.message
+              : "Gagal membaca dataset lokal."
           );
         }
       } finally {
-        inFlight = false;
-        if (active) setLoading(false);
-      }
-    }
-
-    void fetchMatches();
-
-    // Paket dengan kuota terbatas: perbarui setiap 15 menit.
-    const interval = window.setInterval(() => {
-      void fetchMatches();
-    }, 15 * 60 * 1000);
-
-    const handleVisibilityChange = () => {
-      if (document.visibilityState === "visible") {
-        void fetchMatches();
-      }
-    };
-
-    document.addEventListener("visibilitychange", handleVisibilityChange);
-
-    return () => {
-      active = false;
-      window.clearInterval(interval);
-      document.removeEventListener(
-        "visibilitychange",
-        handleVisibilityChange
-      );
-    };
-  }, [mode]);
-  async function runPrediction(fixtureId: number) {
-    setPredictingId(fixtureId);
-    setPredictionErrors((prev) => ({ ...prev, [fixtureId]: "" }));
-
-    try {
-      const response = await fetch(`/api/predict?fixtureId=${fixtureId}`, {
-        cache: "no-store",
-      });
-      const result = await response.json();
-
-      if (!response.ok) throw new Error(result.error ?? "Prediksi gagal.");
-
-      setPredictions((prev) => ({
-        ...prev,
-        [fixtureId]: result as PredictionData,
-      }));
-    } catch (err) {
-      setPredictionErrors((prev) => ({
-        ...prev,
-        [fixtureId]: err instanceof Error ? err.message : "Prediksi gagal.",
-      }));
-    } finally {
-      setPredictingId(null);
-    }
-  }
-  async function runGoalPrediction(fixtureId: number) {
-    setGoalPredictingId(fixtureId);
-    setGoalPredictionErrors((prev) => ({ ...prev, [fixtureId]: "" }));
-
-    try {
-      const response = await fetch(
-        `/api/predict-goals?fixtureId=${fixtureId}`,
-        { cache: "no-store" }
-      );
-      const result = (await response.json()) as GoalPrediction;
-
-      if (!response.ok) {
-        throw new Error(result.detail ?? result.error ?? "Prediksi gol gagal.");
-      }
-
-      setGoalPredictions((prev) => ({ ...prev, [fixtureId]: result }));
-
-      if (result.match && result.additionalGoals) {
-        const key = "goalpredict-backtest-v1";
-        const snapshots = JSON.parse(
-          window.localStorage.getItem(key) ?? "[]"
-        ) as Array<Record<string, unknown>>;
-
-        snapshots.push({
-          fixtureId,
-          capturedAt: new Date().toISOString(),
-          elapsed: result.match.elapsed,
-          scoreHome: result.match.score.home,
-          scoreAway: result.match.score.away,
-          expectedHome: result.additionalGoals.expectedHome,
-          expectedAway: result.additionalGoals.expectedAway,
-          expectedTotal: result.additionalGoals.expectedTotal,
-          liveStatisticsAvailable: result.inputs?.liveStatisticsAvailable ?? false
-        });
-
-        window.localStorage.setItem(key, JSON.stringify(snapshots));
-      }
-
-      if (result.finished) {
-        setGoalAutoIds((prev) => ({ ...prev, [fixtureId]: false }));
-      }
-    } catch (err) {
-      setGoalPredictionErrors((prev) => ({
-        ...prev,
-        [fixtureId]: err instanceof Error ? err.message : "Prediksi gol gagal."
-      }));
-    } finally {
-      setGoalPredictingId(null);
-    }
-  }
-
-  useEffect(() => {
-    const timer = window.setInterval(() => {
-      if (document.visibilityState === "hidden") return;
-
-      const enabledIds = Object.entries(goalAutoIds)
-        .filter(([, enabled]) => enabled)
-        .map(([id]) => Number(id));
-
-      for (const fixtureId of enabledIds) {
-        const match = data?.matches.find((item) => item.id === fixtureId);
-
-        if (match && liveStatuses.includes(match.status)) {
-          void runGoalPrediction(fixtureId);
-        } else if (match && ["FT", "AET", "PEN", "CANC", "ABD", "AWD", "WO"].includes(match.status)) {
-          setGoalAutoIds((prev) => ({ ...prev, [fixtureId]: false }));
+        if (!controller.signal.aborted) {
+          setLoadingOptions(false);
         }
       }
-    }, 60_000);
+    }
 
-    return () => window.clearInterval(timer);
-  }, [goalAutoIds, data]);
-const matches = (data?.matches ?? []).filter((match) => {
-    const term = search.toLowerCase();
-    return (
-      match.home.toLowerCase().includes(term) ||
-      match.away.toLowerCase().includes(term) ||
-      match.league.toLowerCase().includes(term) ||
-      match.country.toLowerCase().includes(term)
+    void loadOptions();
+
+    return () => controller.abort();
+  }, []);
+
+  const selectedLeague = leagues.find(
+    (item) => item.name === league
+  );
+
+  const teams = selectedLeague?.teams ?? [];
+
+  const markets = useMemo(() => {
+    if (!result) return null;
+
+    return goalMarkets(
+      result.expectedGoals.home,
+      result.expectedGoals.away
     );
-  });
+  }, [result]);
+
+  async function submitPrediction(
+    event: React.FormEvent<HTMLFormElement>
+  ) {
+    event.preventDefault();
+
+    if (!league || !home || !away || home === away || !kickoff) {
+      setError("Lengkapi kompetisi, kedua tim, dan waktu kickoff.");
+      return;
+    }
+
+    const kickoffDate = new Date(kickoff);
+
+    if (
+      Number.isNaN(kickoffDate.getTime()) ||
+      kickoffDate.getTime() <= Date.now()
+    ) {
+      setError("Waktu kickoff harus berada di masa mendatang.");
+      return;
+    }
+
+    setLoadingPrediction(true);
+    setError("");
+    setResult(null);
+
+    try {
+      const normalizedLeague = league
+      .normalize("NFD")
+      .replace(/[\u0300-\u036f]/g, "")
+      .toLowerCase();
+
+    const isBundesliga =
+      normalizedLeague.includes("bundesliga") &&
+      !normalizedLeague.includes("uefa");
+
+    const isEuropean = league.startsWith("UEFA ");
+
+    const endpoint = isEuropean
+      ? "/api/european/pre-match"
+      : "/api/pre-match";
+
+      const response = await fetch(endpoint, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+        },
+        cache: "no-store",
+        body: JSON.stringify({
+          league,
+          home,
+          away,
+          kickoff: kickoffDate.toISOString(),
+        }),
+      });
+
+      const payload = await response.json();
+
+      if (!response.ok || payload.available === false) {
+        const detail = payload.detail
+          ? ` ${payload.detail}`
+          : "";
+
+        const reason = payload.reason
+          ? ` ${payload.reason}`
+          : "";
+
+        throw new Error(
+          `${payload.error ?? "Prediksi belum tersedia."}${detail}${reason}`
+        );
+      }
+
+      setResult(normalizeResult(payload));
+    } catch (err) {
+      setError(
+        err instanceof Error
+          ? err.message
+          : "Prediksi gagal diproses."
+      );
+    } finally {
+      setLoadingPrediction(false);
+    }
+  }
+
+  function changeLeague(value: string) {
+    const next = leagues.find((item) => item.name === value);
+
+    setLeague(value);
+    setHome(next?.teams[0] ?? "");
+    setAway(next?.teams[1] ?? "");
+    setResult(null);
+    setError("");
+  }
+
+  const probabilityTotal = result
+    ? result.probabilities.homeWin +
+      result.probabilities.draw +
+      result.probabilities.awayWin
+    : 0;
 
   return (
     <main className="min-h-screen bg-[#080d18] text-slate-100">
       <header className="border-b border-white/10 bg-[#0d1423]">
-        <div className="mx-auto flex max-w-6xl items-center justify-between gap-4 px-5 py-5">
+        <div className="mx-auto flex max-w-6xl flex-wrap items-center justify-between gap-4 px-5 py-5">
           <div className="flex items-center gap-3">
             <div className="flex h-11 w-11 items-center justify-center rounded-xl bg-emerald-400 text-xl font-black text-slate-950">
               G
@@ -424,457 +484,413 @@ const matches = (data?.matches ?? []).filter((match) => {
                 Goal<span className="text-emerald-400">Predict</span>
               </h1>
               <p className="text-xs text-slate-400">
-                Football data & score analytics
+                Historical Football Analytics
               </p>
             </div>
           </div>
+
           <div className="flex items-center gap-2">
-
-            <a
-
-              href="/history"
-
-              className="rounded-full border border-emerald-400/40 px-3 py-1.5 text-xs font-semibold text-emerald-300 transition hover:bg-emerald-400/10"
-
-            >
-
-              Statistik
-
-            </a>
-
             <span className="rounded-full border border-emerald-400/30 px-3 py-1.5 text-xs text-emerald-300">
-
-              API mode
-
+              Local Data Model
             </span>
-
+            <a
+              href="/history"
+              className="rounded-full border border-white/15 px-3 py-1.5 text-xs font-semibold text-slate-200 hover:border-emerald-400/50"
+            >
+              Statistik Historis
+            </a>
           </div>
         </div>
       </header>
 
-      <section className="mx-auto max-w-6xl px-5 py-8">
-        <div className="mb-8">
-          <p className="mb-2 text-sm font-semibold uppercase tracking-[0.2em] text-emerald-400">
-            Match center
+      <div className="mx-auto max-w-6xl px-5 py-8">
+        <section className="mb-8">
+          <p className="text-xs font-bold uppercase tracking-[0.25em] text-emerald-400">
+            Pre-Match Prediction
           </p>
-          <h2 className="text-3xl font-black sm:text-4xl">
-            Semua pertandingan, <span className="text-emerald-400">satu tempat.</span>
+          <h2 className="mt-3 text-3xl font-black sm:text-4xl">
+            Prediksi Pra-Pertandingan
           </h2>
-          <p className="mt-3 max-w-2xl text-sm leading-6 text-slate-400">
-            Pantau skor langsung dan jadwal pertandingan dari data API-Football.
-            Prediksi akan ditambahkan setelah data berhasil terhubung.
+          <p className="mt-3 max-w-3xl text-sm leading-6 text-slate-400">
+            Analisis probabilitas hasil pertandingan, expected goals,
+            prediksi skor, dan pasar gol berdasarkan dataset historis lokal.
+            Tidak memerlukan API-Football.
           </p>
-        </div>
+        </section>
 
-        <div className="mb-5 grid gap-3 sm:grid-cols-3">
-          <div className="rounded-2xl border border-white/10 bg-[#111a2b] p-5">
-            <p className="text-sm text-slate-400">Pertandingan ditampilkan</p>
-            <p className="mt-2 text-3xl font-black">{data?.total ?? "â€”"}</p>
-          </div>
-          <div className="rounded-2xl border border-white/10 bg-[#111a2b] p-5">
-            <p className="text-sm text-slate-400">Mode data</p>
-            <p className="mt-2 text-xl font-bold">
-              {mode === "live" ? "Live sekarang" : "Jadwal hari ini"}
-            </p>
-          </div>
-          <div className="rounded-2xl border border-white/10 bg-[#111a2b] p-5">
-            <p className="text-sm text-slate-400">Sisa kuota API</p>
-            <p className="mt-2 text-3xl font-black">
-              {data?.quota?.remaining ?? "â€”"}
-            </p>
-          </div>
-        </div>
-
-        <div className="mb-5 flex flex-col gap-3 sm:flex-row">
-          <div className="flex flex-wrap gap-2">
-            <button
-              onClick={() => setMode("live")}
-              className={`rounded-xl px-4 py-2.5 text-sm font-bold ${
-                mode === "live"
-                  ? "bg-emerald-400 text-slate-950"
-                  : "bg-white/5 text-slate-300 hover:bg-white/10"
-              }`}
-            >
-              â— Live
-            </button>
-            <button
-              onClick={() => setMode("today")}
-              className={`rounded-xl px-4 py-2.5 text-sm font-bold ${
-                mode === "today"
-                  ? "bg-emerald-400 text-slate-950"
-                  : "bg-white/5 text-slate-300 hover:bg-white/10"
-              }`}
-            >
-              Jadwal hari ini
-            </button>
-            <button
-              onClick={() => void loadMatches(mode)}
-              disabled={loading}
-              className="rounded-xl border border-white/10 px-4 py-2.5 text-sm font-semibold hover:bg-white/5 disabled:opacity-50"
-            >
-              {loading ? "Memuat..." : "â†» Muat ulang"}
-            </button>
-          </div>
-          <input
-            value={search}
-            onChange={(event) => setSearch(event.target.value)}
-            placeholder="Cari tim atau liga..."
-            className="min-w-0 flex-1 rounded-xl border border-white/10 bg-[#111a2b] px-4 py-3 text-sm outline-none placeholder:text-slate-500 focus:border-emerald-400"
-          />
-        </div>
-
-        {error && (
-          <div className="mb-5 rounded-xl border border-red-400/30 bg-red-400/10 p-4 text-sm leading-6 text-red-200">
-            <strong>Gagal memuat data.</strong>
-            <p>{error}</p>
-            <p className="mt-2 text-red-100/70">
-              Periksa API key, kuota akun, dan terminal PowerShell tempat Next.js berjalan.
-            </p>
-          </div>
-        )}
-
-        {loading && !data && (
-          <div className="rounded-2xl border border-white/10 bg-[#111a2b] p-10 text-center text-slate-400">
-            Mengambil data pertandingan...
-          </div>
-        )}
-
-        {!loading && !error && data && matches.length === 0 && (
-          <div className="rounded-2xl border border-white/10 bg-[#111a2b] p-10 text-center">
-            <p className="text-lg font-bold">
-              {search
-                ? "Pertandingan tidak ditemukan"
-                : mode === "live"
-                  ? "Belum ada pertandingan live"
-                  : "Tidak ada pertandingan yang tersedia"}
-            </p>
-            <p className="mt-2 text-sm text-slate-400">
-              {search
-                ? "Coba kata kunci lain."
-                : "Coba muat ulang beberapa saat lagi. Ketersediaan data mengikuti API dan paket akunmu."}
-            </p>
-          </div>
-        )}
-
-        <div className="space-y-3">
-          {matches.map((match) => {
-            const live = liveStatuses.includes(match.status);
-
-            return (
-              <article
-                key={match.id}
-                className="rounded-2xl border border-white/10 bg-[#111a2b] p-4 transition hover:border-emerald-400/40 sm:p-5"
-              >
-                <div className="mb-4 flex flex-wrap items-center justify-between gap-2">
-                  <div>
-                    <p className="text-sm font-bold">{match.league}</p>
-                    <p className="mt-1 text-xs text-slate-500">{match.country}</p>
-                  </div>
-                  <span
-                    className={`rounded-full px-3 py-1 text-xs font-bold ${
-                      live
-                        ? "bg-red-400/10 text-red-300"
-                        : ["FT", "AET", "PEN"].includes(match.status)
-                          ? "bg-slate-700 text-slate-300"
-                          : "bg-amber-400/10 text-amber-300"
-                    }`}
-                  >
-                    {live && match.elapsed !== null
-                      ? `LIVE ${match.elapsed}'`
-                      : match.statusText || match.status}
-                  </span>
-                </div>
-
-                <div className="grid grid-cols-[1fr_auto_1fr] items-center gap-3">
-                  <div className="flex min-w-0 items-center gap-2">
-                    {match.homeLogo && (
-                      // eslint-disable-next-line @next/next/no-img-element
-                      <img
-                        src={match.homeLogo}
-                        alt=""
-                        className="h-8 w-8 shrink-0 object-contain"
-                      />
-                    )}
-                    <span className="text-sm font-semibold sm:text-base">
-                      {match.home}
-                    </span>
-                  </div>
-
-                  <div className="rounded-xl bg-black/20 px-3 py-2 text-xl font-black tabular-nums">
-                    {score(match.homeScore)} : {score(match.awayScore)}
-                  </div>
-
-                  <div className="flex min-w-0 items-center justify-end gap-2 text-right">
-                    <span className="text-sm font-semibold sm:text-base">
-                      {match.away}
-                    </span>
-                    {match.awayLogo && (
-                      // eslint-disable-next-line @next/next/no-img-element
-                      <img
-                        src={match.awayLogo}
-                        alt=""
-                        className="h-8 w-8 shrink-0 object-contain"
-                      />
-                    )}
-                  </div>
-                </div>
-
-                <div className="mt-4">
-                  <button
-                    onClick={() => void runPrediction(match.id)}
-                    disabled={predictingId === match.id}
-                    className="rounded-xl border border-emerald-400/30 px-4 py-2 text-sm font-bold text-emerald-300 hover:bg-emerald-400/10 disabled:opacity-50"
-                  >
-                    {predictingId === match.id ? "Menganalisis..." : "Analisis & Prediksi"}
-                  </button>
-
-                  {predictionErrors[match.id] && (
-                    <p className="mt-2 text-sm text-amber-300">
-                      {predictionErrors[match.id]}
-                    </p>
-                  )}
-
-                  {predictions[match.id] && (
-                    <div className="mt-3 rounded-xl border border-emerald-400/20 bg-emerald-400/5 p-4 text-sm">
-                      <p className="font-bold text-emerald-300">
-                        Prediksi: {predictions[match.id].predictions.winner ?? "Belum ada favorit jelas"}
-                      </p>
-                      <p className="mt-2 text-slate-300">
-                        {predictions[match.id].predictions.advice ?? "Saran tidak tersedia."}
-                      </p>
-                      <div className="mt-3 grid grid-cols-3 gap-2 text-center">
-                        <div><p className="text-xs text-slate-400">Kandang</p><p className="font-bold">{predictions[match.id].predictions.probabilities.home ?? "â€”"}</p></div>
-                        <div><p className="text-xs text-slate-400">Seri</p><p className="font-bold">{predictions[match.id].predictions.probabilities.draw ?? "â€”"}</p></div>
-                        <div><p className="text-xs text-slate-400">Tandang</p><p className="font-bold">{predictions[match.id].predictions.probabilities.away ?? "â€”"}</p></div>
-                      </div>
-                      <p className="mt-3 text-xs text-slate-400">
-                        Estimasi rentang gol: {predictions[match.id].predictions.goals.home ?? "â€”"} : {predictions[match.id].predictions.goals.away ?? "â€”"}
-                      </p>
-                      <div className="mt-3 grid grid-cols-1 gap-2 text-xs text-slate-400 sm:grid-cols-3">
-                        <p>Form: {predictions[match.id].predictions.form.home ?? "â€”"} / {predictions[match.id].predictions.form.away ?? "â€”"}</p>
-                        <p>Serangan: {predictions[match.id].predictions.attack.home ?? "â€”"} / {predictions[match.id].predictions.attack.away ?? "â€”"}</p>
-                        <p>Pertahanan: {predictions[match.id].predictions.defense.home ?? "â€”"} / {predictions[match.id].predictions.defense.away ?? "â€”"}</p>
-                      </div>
-                      <p className="mt-3 text-xs text-slate-500">{predictions[match.id].note}</p>
-                    </div>
-                  )}
-                </div>
-{live && (
-                  <div className="mt-4 border-t border-white/5 pt-4">
-                    <div className="flex flex-wrap gap-2">
-                      <button
-                        onClick={() => void runGoalPrediction(match.id)}
-                        disabled={goalPredictingId === match.id}
-                        className="rounded-xl bg-sky-400/10 px-4 py-2 text-sm font-bold text-sky-300 disabled:opacity-50"
-                      >
-                        {goalPredictingId === match.id ? "Menghitung..." : "Prediksi gol tambahan"}
-                      </button>
-                      <button
-                        onClick={() => setGoalAutoIds((prev) => ({ ...prev, [match.id]: !prev[match.id] }))}
-                        className="rounded-xl border border-white/10 px-3 py-2 text-xs text-slate-300"
-                      >
-                        {goalAutoIds[match.id] ? "Matikan refresh otomatis" : "Aktifkan refresh otomatis"}
-                      </button>
-                    </div>
-
-                    {goalAutoIds[match.id] && (
-                      <p className="mt-2 text-xs text-sky-300">Refresh setiap 60 detik selama tab terbuka.</p>
-                    )}
-
-                    {goalPredictionErrors[match.id] && (
-                      <p className="mt-2 text-sm text-amber-300">{goalPredictionErrors[match.id]}</p>
-                    )}
-
-                    {goalPredictions[match.id] && (
-                      <div className="mt-3 rounded-xl border border-sky-400/20 bg-sky-400/5 p-4 text-sm">
-                        {goalPredictions[match.id].finished ? (
-                          <p>Pertandingan selesai. Skor akhir: {goalPredictions[match.id].score?.home ?? "-"} : {goalPredictions[match.id].score?.away ?? "-"}</p>
-                        ) : goalPredictions[match.id].additionalGoals ? (
-                          <>
-                            <p className="font-bold text-sky-300">
-                              Estimasi gol tambahan: {goalPredictions[match.id].additionalGoals?.expectedHome} – {goalPredictions[match.id].additionalGoals?.expectedAway}
-                            </p>
-                            <p className="mt-1">Skor paling mungkin: {goalPredictions[match.id].mostLikelyScore?.home ?? "-"} : {goalPredictions[match.id].mostLikelyScore?.away ?? "-"}</p>
-                            <div className="mt-3 grid grid-cols-3 gap-2 text-center">
-                              <div><p className="text-xs text-slate-400">0 gol lagi</p><p className="font-bold">{goalPredictions[match.id].totalAdditionalGoalsProbability?.zero ?? "-"}</p></div>
-                              <div><p className="text-xs text-slate-400">1 gol lagi</p><p className="font-bold">{goalPredictions[match.id].totalAdditionalGoalsProbability?.one ?? "-"}</p></div>
-                              <div><p className="text-xs text-slate-400">2+ gol lagi</p><p className="font-bold">{goalPredictions[match.id].totalAdditionalGoalsProbability?.twoOrMore ?? "-"}</p></div>
-                            </div>
-                            <p className="mt-3 text-xs text-slate-400">Statistik live: {goalPredictions[match.id].inputs?.liveStatisticsAvailable ? "tersedia" : "tidak tersedia; model menggunakan fallback"}.</p>
-                            <p className="mt-2 text-xs text-slate-500">{goalPredictions[match.id].note}</p>
-                          </>
-                        ) : (
-                          <p>{goalPredictions[match.id].message ?? "Prediksi belum tersedia."}</p>
-                        )}
-                      </div>
-                    )}
-                  </div>
-                )}
-                <div className="mt-4 flex flex-wrap justify-between gap-2 border-t border-white/5 pt-3 text-xs text-slate-500">
-                  <span>
-                    {new Date(match.date).toLocaleString("id-ID", {
-                      dateStyle: "medium",
-                      timeStyle: "short",
-                      timeZone: "Asia/Jakarta",
-                    })} WIB
-                  </span>
-                  <span>{match.venue}</span>
-                  <span>ID: {match.id}</span>
-                </div>
-              </article>
-            );
-          })}
-        </div>
-
-        <section id="pre-match-panel-v1" className="mt-10 rounded-2xl border border-emerald-400/20 bg-[#0d1423] p-5 sm:p-7">
-          <div className="mb-6">
-            <p className="text-sm font-bold uppercase tracking-[0.2em] text-emerald-400">Statistik historis</p>
-            <h2 className="mt-2 text-2xl font-black sm:text-3xl">Prediksi Pra-Pertandingan</h2>
-            <p className="mt-2 max-w-3xl text-sm leading-6 text-slate-400">
-              Prediksi berdasarkan hasil historis liga dan performa kandang/tandang.
-              Ini adalah estimasi statistik, bukan jaminan hasil pertandingan.
-            </p>
-          </div>
-
-          <form onSubmit={runPreMatchPrediction} className="grid gap-4 sm:grid-cols-2">
-            <label className="text-sm text-slate-300">
-              Kompetisi
-              <select value={preLeague} onChange={(event) => {
-                const next = preLeagues.find((item) => item.name === event.target.value);
-                setPreLeague(event.target.value);
-                setPreHome(next?.teams[0] ?? "");
-                setPreAway(next?.teams[1] ?? "");
-                setPreResult(null);
-                setPreError("");
-              }} required className="mt-2 w-full rounded-xl border border-white/10 bg-[#111a2b] px-3 py-3 text-white">
-                {preLeagues.map((league) => (
-                  <option key={league.name} value={league.name} disabled={!league.available}>
-                    {league.name} {!league.available ? "(data belum cukup)" : `(${league.matches} laga historis)`}
-                  </option>
-                ))}
-                                              </select>
-            </label>
-
-            <label className="text-sm text-slate-300">
-              Waktu kickoff
-              <input type="datetime-local" value={preKickoff} onChange={(event) => setPreKickoff(event.target.value)} required
-                className="mt-2 w-full rounded-xl border border-white/10 bg-[#111a2b] px-3 py-3 text-white" />
-            </label>
-
-            <label className="text-sm text-slate-300">
-              Tim kandang
-              <select value={preHome} onChange={(event) => setPreHome(event.target.value)} required
-                className="mt-2 w-full rounded-xl border border-white/10 bg-[#111a2b] px-3 py-3 text-white">
-                {preTeams.map((team) => <option key={team} value={team}>{team}</option>)}
-              </select>
-            </label>
-
-            <label className="text-sm text-slate-300">
-              Tim tandang
-              <select value={preAway} onChange={(event) => setPreAway(event.target.value)} required
-                className="mt-2 w-full rounded-xl border border-white/10 bg-[#111a2b] px-3 py-3 text-white">
-                {preTeams.map((team) => <option key={team} value={team}>{team}</option>)}
-              </select>
-            </label>
-
-            <div className="sm:col-span-2">
-              <button type="submit" disabled={preLoading || !preHome || !preAway || preHome === preAway || !selectedPreLeague?.available}
-                className="rounded-xl bg-emerald-400 px-5 py-3 text-sm font-black text-slate-950 hover:bg-emerald-300 disabled:cursor-not-allowed disabled:opacity-50">
-                {preLoading ? "Menganalisis data..." : "Prediksi Pertandingan"}
-              </button>
-              {preHome === preAway && preHome && <p className="mt-2 text-sm text-amber-300">Pilih dua tim yang berbeda.</p>}
+        <section className={`${card} mb-8`}>
+          <div className="mb-5 flex flex-wrap items-center justify-between gap-3">
+            <div>
+              <h3 className="text-xl font-bold">Atur pertandingan</h3>
+              <p className="mt-1 text-xs text-slate-400">
+                Pilih kompetisi dan dua tim yang berbeda.
+              </p>
             </div>
-          </form>
+            <span className="rounded-full bg-emerald-400/10 px-3 py-1 text-xs font-semibold text-emerald-300">
+              Dataset historis
+            </span>
+          </div>
 
-          {preError && <div role="alert" className="mt-5 rounded-xl border border-amber-400/30 bg-amber-400/10 p-4 text-sm leading-6 text-amber-200">{preError}</div>}
+          {loadingOptions ? (
+            <p className="py-6 text-sm text-slate-400">
+              Membaca dataset dan daftar tim...
+            </p>
+          ) : (
+            <form
+              onSubmit={submitPrediction}
+              className="grid gap-4 sm:grid-cols-2"
+            >
+              <label className="text-sm text-slate-300">
+                Kompetisi
+                <select
+                  value={league}
+                  onChange={(event) => changeLeague(event.target.value)}
+                  required
+                  className={field}
+                >
+                  {leagues.map((item) => (
+                    <option
+                      key={item.name}
+                      value={item.name}
+                      disabled={!item.available}
+                    >
+                      {item.name} â€” {item.matches.toLocaleString("id-ID")} laga
+                      {!item.available ? " (data belum cukup)" : ""}
+                    </option>
+                  ))}
+                </select>
+              </label>
 
-          {preResult && (
-            <div className="mt-6 rounded-2xl border border-emerald-400/20 bg-emerald-400/5 p-4 sm:p-6">
-              <p className="text-xs font-bold uppercase tracking-wider text-emerald-300">Hasil model statistik</p>
-              <div className="mt-3 grid gap-4 sm:grid-cols-3">
+              <label className="text-sm text-slate-300">
+                Waktu kickoff
+                <input
+                  type="datetime-local"
+                  value={kickoff}
+                  onChange={(event) => setKickoff(event.target.value)}
+                  required
+                  className={field}
+                />
+                <span className="mt-1 block text-xs text-slate-500">
+                  Mengikuti zona waktu perangkat.
+                </span>
+              </label>
+
+              <label className="text-sm text-slate-300">
+                Tim kandang
+                <select
+                  value={home}
+                  onChange={(event) => {
+                    setHome(event.target.value);
+                    setResult(null);
+                  }}
+                  required
+                  className={field}
+                >
+                  {teams.map((team) => (
+                    <option key={team} value={team}>
+                      {team}
+                    </option>
+                  ))}
+                </select>
+              </label>
+
+              <label className="text-sm text-slate-300">
+                Tim tandang
+                <select
+                  value={away}
+                  onChange={(event) => {
+                    setAway(event.target.value);
+                    setResult(null);
+                  }}
+                  required
+                  className={field}
+                >
+                  {teams.map((team) => (
+                    <option key={team} value={team}>
+                      {team}
+                    </option>
+                  ))}
+                </select>
+              </label>
+
+              <div className="sm:col-span-2">
+                <button
+                  type="submit"
+                  disabled={
+                    loadingPrediction ||
+                    !selectedLeague?.available ||
+                    !home ||
+                    !away ||
+                    home === away
+                  }
+                  className="w-full rounded-xl bg-emerald-400 px-5 py-3.5 text-sm font-black text-slate-950 transition hover:bg-emerald-300 disabled:cursor-not-allowed disabled:opacity-50 sm:w-auto"
+                >
+                  {loadingPrediction
+                    ? "Menghitung prediksi..."
+                    : "Analisis & Prediksi Pertandingan"}
+                </button>
+
+                {home && away && home === away && (
+                  <p className="mt-2 text-sm text-amber-300">
+                    Tim kandang dan tandang harus berbeda.
+                  </p>
+                )}
+              </div>
+            </form>
+          )}
+
+          {error && (
+            <div
+              role="alert"
+              className="mt-5 rounded-xl border border-amber-400/30 bg-amber-400/10 p-4 text-sm leading-6 text-amber-100"
+            >
+              {error}
+            </div>
+          )}
+        </section>
+
+        {loadingPrediction && (
+          <div className={`${card} mb-8 text-center`}>
+            <p className="font-bold text-emerald-300">
+              Model sedang menganalisis data historis...
+            </p>
+            <p className="mt-2 text-xs text-slate-400">
+              Menghitung expected goals dan distribusi probabilitas skor.
+            </p>
+          </div>
+        )}
+
+        {result && markets && (
+          <section className="space-y-6">
+            <div className={`${card} border-emerald-400/30`}>
+              <div className="flex flex-wrap items-center justify-between gap-3">
                 <div>
-                  <p className="text-sm text-slate-400">Estimasi gol</p>
-                  <p className="mt-1 text-2xl font-black">{preResult.expectedGoals.home} – {preResult.expectedGoals.away}</p>
-                  <p className="mt-1 text-xs text-slate-400">{preHome} – {preAway}</p>
-                </div>
-                <div>
-                  <p className="text-sm text-slate-400">Skor paling mungkin</p>
-                  <p className="mt-1 text-2xl font-black">{preResult.mostLikelyScore.home} – {preResult.mostLikelyScore.away}</p>
-                  <p className="mt-1 text-xs text-slate-400">Probabilitas {preResult.mostLikelyScore.probability}%</p>
-                </div>
-                <div>
-                  <p className="text-sm text-slate-400">Sampel historis</p>
-                  <p className="mt-1 text-2xl font-black">{preResult.sampleSize.leagueMatches}</p>
+                  <p className="text-xs font-bold uppercase tracking-wider text-emerald-300">
+                    Hasil prediksi
+                  </p>
+                  <h3 className="mt-2 text-xl font-black">
+                    {result.teams.home}
+                    <span className="mx-2 text-emerald-400">vs</span>
+                    {result.teams.away}
+                  </h3>
                   <p className="mt-1 text-xs text-slate-400">
-                    Pertandingan kompetisi sebelum tanggal kickoff
+                    {result.league}
+                  </p>
+                </div>
+                <span className="rounded-full border border-emerald-400/30 px-3 py-1.5 text-xs text-emerald-300">
+                  Selesai dianalisis
+                </span>
+              </div>
+
+              <div className="mt-6 grid gap-3 sm:grid-cols-3">
+                <div className="rounded-xl bg-black/20 p-4">
+                  <p className="text-xs text-slate-400">Expected goals kandang</p>
+                  <p className="mt-2 text-3xl font-black text-emerald-300">
+                    {result.expectedGoals.home.toFixed(2)}
+                  </p>
+                  <p className="mt-1 text-xs text-slate-500">
+                    {result.teams.home}
+                  </p>
+                </div>
+                <div className="rounded-xl bg-black/20 p-4">
+                  <p className="text-xs text-slate-400">Prediksi skor utama</p>
+                  <p className="mt-2 text-3xl font-black">
+                    {result.mostLikelyScore.home} â€“ {result.mostLikelyScore.away}
+                  </p>
+                  <p className="mt-1 text-xs text-slate-400">
+                    Probabilitas {result.mostLikelyScore.probability.toFixed(2)}%
+                  </p>
+                </div>
+                <div className="rounded-xl bg-black/20 p-4">
+                  <p className="text-xs text-slate-400">Expected goals tandang</p>
+                  <p className="mt-2 text-3xl font-black text-sky-300">
+                    {result.expectedGoals.away.toFixed(2)}
+                  </p>
+                  <p className="mt-1 text-xs text-slate-500">
+                    {result.teams.away}
                   </p>
                 </div>
               </div>
+            </div>
 
-              <div className="mt-5 grid grid-cols-2 gap-3 sm:grid-cols-4">
-                <div className="rounded-xl bg-black/20 p-3"><p className="text-xs text-slate-400">Menang kandang</p><p className="mt-1 font-bold">{preResult.probabilities.homeWin}%</p></div>
-                <div className="rounded-xl bg-black/20 p-3"><p className="text-xs text-slate-400">Seri</p><p className="mt-1 font-bold">{preResult.probabilities.draw}%</p></div>
-                <div className="rounded-xl bg-black/20 p-3"><p className="text-xs text-slate-400">Menang tandang</p><p className="mt-1 font-bold">{preResult.probabilities.awayWin}%</p></div>
-                <div className="rounded-xl bg-black/20 p-3"><p className="text-xs text-slate-400">Under 2.5 gol</p><p className="mt-1 font-bold">{preResult.probabilities.under2_5Goals}%</p></div>
+            <div className={card}>
+              <h3 className="text-lg font-bold">Probabilitas hasil 1X2</h3>
+              <p className="mt-1 text-xs text-slate-400">
+                Peluang hasil berdasarkan distribusi skor model.
+              </p>
+
+              <div className="mt-5 space-y-5">
+                <ProbabilityBar
+                  label={`Menang ${result.teams.home}`}
+                  value={result.probabilities.homeWin}
+                  color="bg-emerald-400"
+                />
+                <ProbabilityBar
+                  label="Seri"
+                  value={result.probabilities.draw}
+                  color="bg-amber-400"
+                />
+                <ProbabilityBar
+                  label={`Menang ${result.teams.away}`}
+                  value={result.probabilities.awayWin}
+                  color="bg-sky-400"
+                />
               </div>
 
-              <div className="mt-5">
-                <p className="font-bold">Lima skor dengan probabilitas tertinggi</p>
-                <div className="mt-2 flex flex-wrap gap-2">
-                  {preResult.topScores.map((item) => (
-                    <span key={item.score} className="rounded-lg border border-white/10 bg-black/20 px-3 py-2 text-sm">
-                      {item.score} <strong className="text-emerald-300">{item.probability}%</strong>
-                    </span>
-                  ))}
-                </div>
+              <p className="mt-4 text-xs text-slate-500">
+                Total probabilitas 1X2: {probabilityTotal.toFixed(2)}%.
+                Perbedaan kecil dapat terjadi karena pembulatan.
+              </p>
+            </div>
+
+            <div className={card}>
+              <h3 className="text-lg font-bold">Analisis total gol</h3>
+              <p className="mt-1 text-xs text-slate-400">
+                Perhitungan dari distribusi Poisson dengan expected goals kedua tim.
+              </p>
+
+              <div className="mt-5 grid grid-cols-2 gap-3 sm:grid-cols-3">
+                <Metric label="Over 1.5" value={markets.over15} />
+                <Metric label="Under 1.5" value={markets.under15} />
+                <Metric label="Over 2.5" value={markets.over25} />
+                <Metric label="Under 2.5" value={markets.under25} />
+                <Metric label="Over 3.5" value={markets.over35} />
+                <Metric label="Under 3.5" value={markets.under35} />
+              </div>
+            </div>
+
+            <div className={card}>
+              <h3 className="text-lg font-bold">Both Teams To Score (BTTS)</h3>
+              <div className="mt-4 grid grid-cols-2 gap-3">
+                <Metric label="Kedua tim mencetak gol" value={markets.btts} />
+                <Metric label="Minimal satu tim tanpa gol" value={markets.noBtts} />
+              </div>
+            </div>
+
+            <div className={card}>
+              <h3 className="text-lg font-bold">Lima skor paling mungkin</h3>
+              <div className="mt-4 overflow-x-auto">
+                <table className="w-full min-w-[300px] text-left text-sm">
+                  <thead>
+                    <tr className="border-b border-white/10 text-xs text-slate-400">
+                      <th className="py-3">Peringkat</th>
+                      <th className="py-3">Skor</th>
+                      <th className="py-3 text-right">Probabilitas</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {result.topScores.map((item, index) => (
+                      <tr
+                        key={`${item.score}-${index}`}
+                        className="border-b border-white/5"
+                      >
+                        <td className="py-3 text-slate-400">
+                          {index + 1}
+                        </td>
+                        <td className="py-3 font-bold">
+                          {item.score}
+                        </td>
+                        <td className="py-3 text-right font-bold text-emerald-300">
+                          {item.probability.toFixed(2)}%
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            </div>
+
+            <div className={card}>
+              <h3 className="text-lg font-bold">Kualitas dan cakupan data</h3>
+              <div className="mt-4 grid grid-cols-2 gap-3 sm:grid-cols-3">
+                <Metric
+                  label="Riwayat kompetisi"
+                  value={result.sampleSize.competition}
+                  suffix=" laga"
+                />
+                <Metric
+                  label="Riwayat kandang tersedia"
+                  value={result.sampleSize.homeAvailable}
+                  suffix=" laga"
+                />
+                <Metric
+                  label="Riwayat tandang tersedia"
+                  value={result.sampleSize.awayAvailable}
+                  suffix=" laga"
+                />
+                <Metric
+                  label="Sampel kandang digunakan"
+                  value={result.sampleSize.homeUsed}
+                  suffix=" laga"
+                />
+                <Metric
+                  label="Sampel tandang digunakan"
+                  value={result.sampleSize.awayUsed}
+                  suffix=" laga"
+                />
               </div>
 
               <div className="mt-5 space-y-2 text-xs leading-5 text-slate-400">
                 <p>
-                  Metode: {preResult.method}. Dataset: {preResult.source}.
+                  <strong className="text-slate-300">Metode:</strong>{" "}
+                  {result.method}
                 </p>
                 <p>
-                  Sampel kompetisi: {preResult.sampleSize.competitionMatches} laga.
-                  Sampel kandang yang digunakan: {preResult.sampleSize.homeMatchesUsed} laga.
-                  Sampel tandang yang digunakan: {preResult.sampleSize.awayMatchesUsed} laga.
+                  <strong className="text-slate-300">Sumber:</strong>{" "}
+                  {result.source}
                 </p>
                 <p>
-                  Batas tanggal prediksi: {preResult.predictionCutoff ?? preResult.dataCutoff ?? "Tidak tersedia"}.
+                  <strong className="text-slate-300">Batas data prediksi:</strong>{" "}
+                  {result.predictionCutoff || "Tidak tersedia"}
                 </p>
                 <p>
-                  Pertandingan historis terakhir yang digunakan: {preResult.latestHistoricalMatchDate ?? "Tidak tersedia"}.
+                  <strong className="text-slate-300">Pertandingan historis terakhir:</strong>{" "}
+                  {result.latestHistoricalMatchDate || "Tidak disediakan API"}
                 </p>
               </div>
-              <p className="mt-3 rounded-xl border border-amber-400/20 bg-amber-400/5 p-3 text-xs leading-5 text-amber-100">
-                {preResult.disclaimer}
+            </div>
+
+            <div className="rounded-xl border border-amber-400/20 bg-amber-400/5 p-4 text-xs leading-6 text-amber-100">
+              <strong>Catatan model dan keterbatasan</strong>
+              <p className="mt-2">{result.disclaimer}</p>
+              <p className="mt-2">
+                Over/Under dan BTTS pada dashboard dihitung dari expected goals
+                menggunakan asumsi gol kedua tim independen. Angka tersebut
+                merupakan estimasi model, bukan informasi pasar taruhan.
               </p>
             </div>
-          )}
+          </section>
+        )}
 
-          <p className="mt-5 text-xs leading-5 text-slate-500">
-            Statistik teknis seperti xG, penguasaan bola, tembakan, sepak pojok,
-            dan kartu tidak digunakan jika nilainya tidak tersedia dalam dataset.
-            Prediksi bukan kepastian hasil pertandingan.
-          </p>
-        </section>
-        <footer className="mt-8 border-t border-white/10 pt-4 text-xs leading-6 text-slate-500">
-          {data?.updatedAt && (
-            <p>
-              Data diambil:{" "}
-              {new Date(data.updatedAt).toLocaleString("id-ID", {
-                dateStyle: "medium",
-                timeStyle: "short",
-                timeZone: "Asia/Jakarta",
-              })} WIB
+        {!result && !loadingPrediction && (
+          <section className={`${card} border-dashed text-center`}>
+            <p className="text-lg font-bold">
+              Hasil prediksi akan ditampilkan di sini
             </p>
-          )}
-          Data pertandingan disediakan API-Football. Skor dan jadwal mengikuti
-          ketersediaan paket API. Belum ada prediksi otomatis pada tahap ini.
+            <p className="mt-2 text-sm text-slate-400">
+              Pilih kompetisi, tim kandang, tim tandang, dan kickoff untuk
+              menghasilkan analisis pra-pertandingan.
+            </p>
+          </section>
+        )}
+
+        <footer className="mt-10 border-t border-white/10 pt-5 text-xs leading-6 text-slate-500">
+          <p>GoalPredict â€” Local Historical Football Analytics.</p>
+          <p>
+            Sistem menggunakan dataset historis lokal dan model statistik
+            Independent Poisson. Data historis tidak menjamin hasil pertandingan
+            mendatang.
+          </p>
+          <p className="mt-2">
+            <a
+              href="/history"
+              className="text-emerald-300 hover:underline"
+            >
+              Buka Pusat Statistik Historis
+            </a>
+          </p>
         </footer>
-      </section>
+      </div>
     </main>
   );
 }
-
-
-

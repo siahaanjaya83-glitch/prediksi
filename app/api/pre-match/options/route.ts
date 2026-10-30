@@ -47,15 +47,21 @@ export async function GET() {
   try {
     const dataDir = path.join(process.cwd(), "data");
 
-    const [domesticRaw, europeanRaw] = await Promise.all([
+    const [domesticRaw, europeanRaw, bundesligaRaw] = await Promise.all([
       readFile(path.join(dataDir, "match-stats.json"), "utf8"),
       readFile(path.join(dataDir, "european-match-stats-v2.json"), "utf8"),
+      readFile(path.join(dataDir, "bundesliga-match-stats.json"), "utf8"),
     ]);
 
     const domestic = JSON.parse(domesticRaw) as Match[];
     const european = JSON.parse(europeanRaw) as Match[];
+    const bundesliga = JSON.parse(bundesligaRaw) as Match[];
 
-    if (!Array.isArray(domestic) || !Array.isArray(european)) {
+    if (
+      !Array.isArray(domestic) ||
+      !Array.isArray(european) ||
+      !Array.isArray(bundesliga)
+    ) {
       throw new Error("Format dataset tidak valid.");
     }
 
@@ -75,6 +81,14 @@ export async function GET() {
         );
         return buildLeague(name, rows);
       }),
+      buildLeague(
+        "Fu\u00dfball-Bundesliga",
+        bundesliga.filter(
+          (match) =>
+            String(match.league ?? "").toLowerCase() ===
+            "fu\u00dfball-bundesliga".toLowerCase()
+        )
+      ),
     ];
 
     return NextResponse.json({ leagues });

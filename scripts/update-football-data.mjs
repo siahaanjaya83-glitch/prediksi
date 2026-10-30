@@ -1,11 +1,10 @@
-﻿import fs from "node:fs/promises";
+import fs from "node:fs/promises";
 import path from "node:path";
 
 const BASE = "https://raw.githubusercontent.com/oladeeayo/open-matchday/master";
 const ROOT = process.cwd();
 const DATA = path.join(ROOT, "data");
 const BACKUP = path.join(DATA, "backups");
-const YEAR = new Date().getUTCFullYear();
 
 const resultsPath = path.join(DATA, "football-2026-results.json");
 const fixturesPath = path.join(DATA, "football-2026-fixtures.json");

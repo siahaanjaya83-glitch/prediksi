@@ -1,0 +1,46 @@
+[
+    {
+        "league":  "English Premier League",
+        "matches":  1140,
+        "goalsPerMatch":  2.988,
+        "homeWinPercent":  43.16,
+        "drawPercent":  24.47,
+        "awayWinPercent":  32.37,
+        "bothTeamsScoredPercent":  58.33,
+        "over25GoalsPercent":  58.77,
+        "averageShots":  13.08
+    },
+    {
+        "league":  "Serie A",
+        "matches":  1140,
+        "goalsPerMatch":  2.532,
+        "homeWinPercent":  40.18,
+        "drawPercent":  27.98,
+        "awayWinPercent":  31.84,
+        "bothTeamsScoredPercent":  49.74,
+        "over25GoalsPercent":  47.72,
+        "averageShots":  12.38
+    },
+    {
+        "league":  "La Liga",
+        "matches":  1140,
+        "goalsPerMatch":  2.653,
+        "homeWinPercent":  45.79,
+        "drawPercent":  26.05,
+        "awayWinPercent":  28.16,
+        "bothTeamsScoredPercent":  53.42,
+        "over25GoalsPercent":  48.25,
+        "averageShots":  12.19
+    },
+    {
+        "league":  "Ligue 1 France",
+        "matches":  918,
+        "goalsPerMatch":  2.832,
+        "homeWinPercent":  44.01,
+        "drawPercent":  23.75,
+        "awayWinPercent":  32.24,
+        "bothTeamsScoredPercent":  53.81,
+        "over25GoalsPercent":  53.7,
+        "averageShots":  12.51
+    }
+]

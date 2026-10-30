@@ -1,6 +1,7 @@
 "use client";
 
-import { useCallback, useEffect, useState } from "react";
+import Link from "next/link";
+import { useEffect, useState } from "react";
 
 type Match = {
   id: string; source: string; league: string; season: string; date: string;
@@ -8,20 +9,93 @@ type Match = {
   result: "H" | "D" | "A";
 };
 
+type Scoreline = {
+  score: string;
+  count: number;
+};
+
+type TechnicalMetric = {
+  availableMatches: number;
+  total: number;
+  average: number | null;
+};
+
+type TechnicalStats = {
+  shots: { home: TechnicalMetric; away: TechnicalMetric };
+  shotsOnTarget: { home: TechnicalMetric; away: TechnicalMetric };
+  corners: { home: TechnicalMetric; away: TechnicalMetric };
+  possession: { home: TechnicalMetric; away: TechnicalMetric };
+  xG: { home: TechnicalMetric; away: TechnicalMetric };
+  fouls: { home: TechnicalMetric; away: TechnicalMetric };
+  yellowCards: { home: TechnicalMetric; away: TechnicalMetric };
+  redCards: { home: TechnicalMetric; away: TechnicalMetric };
+};
+
+type MatchSummary = {
+  matches: number;
+  homeWins: number;
+  draws: number;
+  awayWins: number;
+  homeWinPct: number;
+  drawPct: number;
+  awayWinPct: number;
+  homeGoals: number;
+  awayGoals: number;
+  totalGoals: number;
+  averageGoals: number;
+  over15: number;
+  over25: number;
+  over35: number;
+  under25: number;
+  btts: number;
+  cleanSheetsHome: number;
+  cleanSheetsAway: number;
+  scorelines: Scoreline[];
+  technical: TechnicalStats;
+};
+
+type CompetitionStats = MatchSummary & {
+  league: string;
+};
+
+type SeasonStats = MatchSummary & {
+  season: string;
+};
+
+type TeamStats = {
+  team: string;
+  played: number;
+  wins: number;
+  draws: number;
+  losses: number;
+  winPct: number;
+  goalsFor: number;
+  goalsAgainst: number;
+  goalDifference: number;
+  averageGoalsFor: number;
+  home: MatchSummary;
+  away: MatchSummary;
+  recent: Match[];
+};
+
 type Data = {
   total: number;
   validRecords: number;
   page: number;
   totalPages: number;
-  summary: any;
+  summary: MatchSummary;
   competitions: string[];
   seasons: string[];
   teams: string[];
-  competitionStats: any[];
-  seasonStats: any[];
+  competitionStats: CompetitionStats[];
+  seasonStats: SeasonStats[];
   h2h: {
-    team1: string; team2: string; matches: Match[]; summary: any;
-    team1Stats: any; team2Stats: any;
+    team1: string;
+    team2: string;
+    matches: Match[];
+    summary: MatchSummary;
+    team1Stats: TeamStats | null;
+    team2Stats: TeamStats | null;
   };
   matches: Match[];
 };
@@ -71,31 +145,62 @@ export default function HistoryPage() {
   const [page, setPage] = useState(1);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
+  const [retry, setRetry] = useState(0);
 
-  const load = useCallback(async () => {
-    setLoading(true);
-    setError("");
-    try {
-      const p = new URLSearchParams({
-        source, page: String(page), limit: "50",
-      });
-      if (league) p.set("league", league);
-      if (season) p.set("season", season);
-      if (query.trim()) p.set("q", query.trim());
-      if (team1) p.set("team1", team1);
-      if (team2) p.set("team2", team2);
+  useEffect(() => {
+    const controller = new AbortController();
+    let active = true;
 
-      const response = await fetch(`/api/history?${p}`);
-      if (!response.ok) throw new Error(`HTTP ${response.status}`);
-      setData(await response.json());
-    } catch (e) {
-      setError(e instanceof Error ? e.message : "Gagal memuat data");
-    } finally {
-      setLoading(false);
+    async function fetchHistory() {
+      setLoading(true);
+      setError("");
+
+      try {
+        const p = new URLSearchParams({
+          source,
+          page: String(page),
+          limit: "50",
+        });
+
+        if (league) p.set("league", league);
+        if (season) p.set("season", season);
+        if (query.trim()) p.set("q", query.trim());
+        if (team1) p.set("team1", team1);
+        if (team2) p.set("team2", team2);
+
+        const response = await fetch(`/api/history?${p}`, {
+          signal: controller.signal,
+        });
+
+        if (!response.ok) {
+          throw new Error(`HTTP ${response.status}`);
+        }
+
+        const result = await response.json() as Data;
+
+        if (active) {
+          setData(result);
+        }
+      } catch (e) {
+        if (active && !(e instanceof Error && e.name === "AbortError")) {
+          setError(
+            e instanceof Error ? e.message : "Gagal memuat data"
+          );
+        }
+      } finally {
+        if (active) {
+          setLoading(false);
+        }
+      }
     }
-  }, [source, league, season, query, team1, team2, page]);
 
-  useEffect(() => { void load(); }, [load]);
+    void fetchHistory();
+
+    return () => {
+      active = false;
+      controller.abort();
+    };
+  }, [source, league, season, query, team1, team2, page, retry]);
 
   function resetPage() { setPage(1); }
 
@@ -110,11 +215,11 @@ export default function HistoryPage() {
         <h1 className="mt-1 text-3xl font-bold">Pusat Statistik Historis</h1>
         <p className="mt-2 text-sm text-slate-500">Menggunakan dataset lokal, tanpa API-Football.</p>
       </div>
-      <a href="/" className="rounded-lg border border-slate-300 px-4 py-2 text-sm dark:border-slate-700">Kembali ke beranda</a>
+      <Link href="/" className="rounded-lg border border-slate-300 px-4 py-2 text-sm dark:border-slate-700">Kembali ke beranda</Link>
     </header>
 
     {loading && <p className="mb-4">Memuat statistik...</p>}
-    {error && <div className="mb-4 rounded-lg border border-red-300 p-4 text-red-600">Gagal: {error} <button onClick={() => void load()} className="underline">Coba lagi</button></div>}
+    {error && <div className="mb-4 rounded-lg border border-red-300 p-4 text-red-600">Gagal: {error} <button onClick={() => setRetry(value => value + 1)} className="underline">Coba lagi</button></div>}
 
     <section className="mb-8 grid grid-cols-2 gap-3 md:grid-cols-4">
       <Metric label="Pertandingan valid" value={s?.matches} />
@@ -191,23 +296,31 @@ export default function HistoryPage() {
       <div className="overflow-x-auto">
         <table className="w-full min-w-[650px] text-left text-sm">
           <thead className="bg-slate-50 dark:bg-slate-800"><tr><th className="p-3">Statistik</th><th className="p-3">Rata-rata kandang</th><th className="p-3">Sampel kandang</th><th className="p-3">Rata-rata tandang</th><th className="p-3">Sampel tandang</th></tr></thead>
-          <tbody>{[
-            ["Tembakan", tech?.shots], ["Tembakan tepat sasaran", tech?.shotsOnTarget],
-            ["Sepak pojok", tech?.corners], ["Penguasaan bola (%)", tech?.possession],
-            ["Expected goals (xG)", tech?.xG], ["Pelanggaran", tech?.fouls],
-            ["Kartu kuning", tech?.yellowCards], ["Kartu merah", tech?.redCards],
-          ].map(([label, v]: any) => <tr key={label} className="border-t border-slate-100 dark:border-slate-800">
-            <td className="p-3">{label}</td><td className="p-3">{fmt(v?.home?.average)}</td>
-            <td className="p-3">{fmt(v?.home?.availableMatches)}</td><td className="p-3">{fmt(v?.away?.average)}</td>
-            <td className="p-3">{fmt(v?.away?.availableMatches)}</td>
-          </tr>)}</tbody>
+          <tbody>{([
+            ["Tembakan", tech?.shots],
+            ["Tembakan tepat sasaran", tech?.shotsOnTarget],
+            ["Sepak pojok", tech?.corners],
+            ["Penguasaan bola (%)", tech?.possession],
+            ["Expected goals (xG)", tech?.xG],
+            ["Pelanggaran", tech?.fouls],
+            ["Kartu kuning", tech?.yellowCards],
+            ["Kartu merah", tech?.redCards],
+          ] as Array<[string, { home: TechnicalMetric; away: TechnicalMetric } | undefined]>).map(([label, v]) => (
+            <tr key={label} className="border-t border-slate-100 dark:border-slate-800">
+              <td className="p-3">{label}</td>
+              <td className="p-3">{fmt(v?.home.average)}</td>
+              <td className="p-3">{fmt(v?.home.availableMatches)}</td>
+              <td className="p-3">{fmt(v?.away.average)}</td>
+              <td className="p-3">{fmt(v?.away.availableMatches)}</td>
+            </tr>
+          ))}</tbody>
         </table>
       </div>
     </section>
 
     <section className={`${card} mb-8`}>
       <h2 className="mb-4 text-xl font-bold">Skor yang paling sering terjadi</h2>
-      <div className="flex flex-wrap gap-2">{(s?.scorelines ?? []).map((x: any) =>
+      <div className="flex flex-wrap gap-2">{(s?.scorelines ?? []).map((x: Scoreline) =>
         <span key={x.score} className="rounded-lg border border-slate-200 px-3 py-2 text-sm dark:border-slate-700">{x.score}: <b>{x.count}</b></span>
       )}</div>
     </section>
@@ -216,7 +329,7 @@ export default function HistoryPage() {
       <h2 className="mb-4 text-xl font-bold">Statistik per kompetisi</h2>
       <div className="overflow-x-auto"><table className="w-full min-w-[650px] text-left text-sm">
         <thead className="bg-slate-50 dark:bg-slate-800"><tr><th className="p-3">Kompetisi</th><th className="p-3">Laga</th><th className="p-3">Gol</th><th className="p-3">Kandang menang</th><th className="p-3">Seri</th><th className="p-3">Tandang menang</th></tr></thead>
-        <tbody>{(data?.competitionStats ?? []).map((x: any) => <tr key={x.league} className="border-t border-slate-100 dark:border-slate-800">
+        <tbody>{(data?.competitionStats ?? []).map((x: CompetitionStats) => <tr key={x.league} className="border-t border-slate-100 dark:border-slate-800">
           <td className="p-3">{x.league}</td><td className="p-3">{x.matches}</td><td className="p-3">{x.totalGoals}</td><td className="p-3">{x.homeWins}</td><td className="p-3">{x.draws}</td><td className="p-3">{x.awayWins}</td>
         </tr>)}</tbody>
       </table></div>
@@ -226,7 +339,7 @@ export default function HistoryPage() {
       <h2 className="mb-4 text-xl font-bold">Statistik per musim</h2>
       <div className="overflow-x-auto"><table className="w-full min-w-[650px] text-left text-sm">
         <thead className="bg-slate-50 dark:bg-slate-800"><tr><th className="p-3">Musim</th><th className="p-3">Laga</th><th className="p-3">Gol</th><th className="p-3">Kandang menang</th><th className="p-3">Seri</th><th className="p-3">Tandang menang</th></tr></thead>
-        <tbody>{(data?.seasonStats ?? []).map((x: any) => <tr key={x.season} className="border-t border-slate-100 dark:border-slate-800">
+        <tbody>{(data?.seasonStats ?? []).map((x: SeasonStats) => <tr key={x.season} className="border-t border-slate-100 dark:border-slate-800">
           <td className="p-3">{x.season}</td><td className="p-3">{x.matches}</td><td className="p-3">{x.totalGoals}</td><td className="p-3">{x.homeWins}</td><td className="p-3">{x.draws}</td><td className="p-3">{x.awayWins}</td>
         </tr>)}</tbody>
       </table></div>

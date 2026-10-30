@@ -1,6 +1,7 @@
 import { NextResponse } from "next/server";
 import { readFile } from "node:fs/promises";
 import path from "node:path";
+import dataset from "../../../data/bundesliga-match-stats.json";
 
 type HistoricalMatch = {
   league: string;
@@ -108,6 +109,357 @@ function validMatch(match: HistoricalMatch): boolean {
   );
 }
 
+
+type BundesligaMatch = {
+  id: string;
+  league: string;
+  season: string;
+  date: string;
+  home: string;
+  away: string;
+  homeGoals: number;
+  awayGoals: number;
+  result: "H" | "D" | "A";
+  matchStatus?: string;
+};
+
+const bundesMatches = dataset as BundesligaMatch[];
+
+const bundesTeamNames = [
+  ...new Set(
+    bundesMatches.flatMap(m => [m.home, m.away])
+  ),
+];
+
+function bundesNormalizeKey(value: string): string {
+  return value
+    .normalize("NFD")
+    .replace(/[\u0300-\u036f]/g, "")
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, " ")
+    .trim()
+    .replace(/\s+/g, " ");
+}
+
+const bundesAliases: Record<string, string> = {
+  "borussia dortmund": "Dortmund",
+  "dortmund": "Dortmund",
+
+  "fc bayern munchen": "Bayern Munich",
+  "bayern munchen": "Bayern Munich",
+  "bayern munich": "Bayern Munich",
+
+  "bayer leverkusen": "Leverkusen",
+  "leverkusen": "Leverkusen",
+
+  "borussia monchengladbach": "M'gladbach",
+  "monchengladbach": "M'gladbach",
+  "m gladbach": "M'gladbach",
+
+  "eintracht frankfurt": "Ein Frankfurt",
+  "ein frankfurt": "Ein Frankfurt",
+
+  "1 fc koln": "FC Koln",
+  "fc koln": "FC Koln",
+  "1 fc cologne": "FC Koln",
+  "1 fc koeln": "FC Koln",
+
+  "tsg hoffenheim": "Hoffenheim",
+  "hoffenheim": "Hoffenheim",
+
+  "sc freiburg": "Freiburg",
+  "freiburg": "Freiburg",
+
+  "vfb stuttgart": "Stuttgart",
+  "stuttgart": "Stuttgart",
+
+  "fc augsburg": "Augsburg",
+  "augsburg": "Augsburg",
+
+  "1 fsv mainz 05": "Mainz",
+  "fsv mainz 05": "Mainz",
+  "mainz 05": "Mainz",
+  "mainz": "Mainz",
+
+  "sv werder bremen": "Werder Bremen",
+  "werder bremen": "Werder Bremen",
+
+  "rb leipzig": "RB Leipzig",
+
+  "vfl wolfsburg": "Wolfsburg",
+  "wolfsburg": "Wolfsburg",
+
+  "1 fc union berlin": "Union Berlin",
+  "union berlin": "Union Berlin",
+
+  "fc st pauli": "St Pauli",
+  "fc sankt pauli": "St Pauli",
+  "st pauli": "St Pauli",
+
+  "holstein kiel": "Holstein Kiel",
+
+  "vfl bochum": "Bochum",
+  "bochum": "Bochum",
+
+  "sv darmstadt 98": "Darmstadt",
+  "darmstadt 98": "Darmstadt",
+  "darmstadt": "Darmstadt",
+
+  "1 fc heidenheim": "Heidenheim",
+  "1 fc heidenheim 1846": "Heidenheim",
+  "heidenheim": "Heidenheim",
+
+  "fc schalke 04": "Schalke 04",
+  "schalke 04": "Schalke 04",
+
+  "sv elversberg": "Elversberg",
+  "elversberg": "Elversberg",
+
+  "sc paderborn 07": "Paderborn",
+  "paderborn 07": "Paderborn",
+  "paderborn": "Paderborn",
+};
+
+function bundesResolveTeam(input: string): string | null {
+  const key = bundesNormalizeKey(input);
+  const alias = bundesAliases[key];
+
+  if (alias && bundesTeamNames.includes(alias)) {
+    return alias;
+  }
+
+  return bundesTeamNames.find(
+    name => bundesNormalizeKey(name) === key
+  ) ?? null;
+}
+
+function bundesMean(values: number[]): number {
+  return values.length
+    ? values.reduce((a, b) => a + b, 0) / values.length
+    : 0;
+}
+
+function bundesPoisson(lambda: number, goals: number): number {
+  let factorial = 1;
+
+  for (let i = 2; i <= goals; i++) {
+    factorial *= i;
+  }
+
+  return Math.exp(-lambda) *
+    Math.pow(lambda, goals) /
+    factorial;
+}
+
+function bundesPredict(
+  home: string,
+  away: string,
+  kickoff: string
+) {
+  const kickoffDate = new Date(kickoff);
+
+  if (Number.isNaN(kickoffDate.getTime())) {
+    throw new Error("Format kickoff Bundesliga tidak valid.");
+  }
+
+  // Dataset hanya memiliki tanggal, bukan jam.
+  // Seluruh pertandingan pada tanggal kickoff dikeluarkan.
+  const cutoffDate = kickoff.slice(0, 10);
+
+  const history = bundesMatches.filter(m => {
+    const status = String(m.matchStatus ?? "")
+      .trim()
+      .toLowerCase();
+
+    const validStatus =
+      !status ||
+      status === "completed" ||
+      status === "played";
+
+    return (
+      typeof m.date === "string" &&
+      m.date < cutoffDate &&
+      Number.isFinite(Number(m.homeGoals)) &&
+      Number.isFinite(Number(m.awayGoals)) &&
+      Number(m.homeGoals) >= 0 &&
+      Number(m.awayGoals) >= 0 &&
+      validStatus
+    );
+  });
+
+  const leagueHome = bundesMean(
+    history.map(m => Number(m.homeGoals))
+  );
+
+  const leagueAway = bundesMean(
+    history.map(m => Number(m.awayGoals))
+  );
+
+  if (
+    history.length < 50 ||
+    leagueHome <= 0 ||
+    leagueAway <= 0
+  ) {
+    return {
+      available: false,
+      reason: "Riwayat kompetisi Bundesliga belum mencukupi.",
+      historyMatches: history.length,
+    };
+  }
+
+  const homeAtHome = history.filter(m => m.home === home);
+  const awayAtAway = history.filter(m => m.away === away);
+
+  if (
+    homeAtHome.length < 3 ||
+    awayAtAway.length < 3
+  ) {
+    return {
+      available: false,
+      reason: "Riwayat kandang/tandang minimal 3 pertandingan belum terpenuhi.",
+      home,
+      away,
+      historyMatches: history.length,
+      homeVenueMatches: homeAtHome.length,
+      awayVenueMatches: awayAtAway.length,
+    };
+  }
+
+  const priorWeight = 5;
+
+  const homeAttack = (
+    homeAtHome.reduce(
+      (s, m) => s + Number(m.homeGoals), 0
+    ) + priorWeight * leagueHome
+  ) / (homeAtHome.length + priorWeight);
+
+  const homeDefense = (
+    homeAtHome.reduce(
+      (s, m) => s + Number(m.awayGoals), 0
+    ) + priorWeight * leagueAway
+  ) / (homeAtHome.length + priorWeight);
+
+  const awayAttack = (
+    awayAtAway.reduce(
+      (s, m) => s + Number(m.awayGoals), 0
+    ) + priorWeight * leagueAway
+  ) / (awayAtAway.length + priorWeight);
+
+  const awayDefense = (
+    awayAtAway.reduce(
+      (s, m) => s + Number(m.homeGoals), 0
+    ) + priorWeight * leagueHome
+  ) / (awayAtAway.length + priorWeight);
+
+  const homeFactor = homeAttack / leagueHome;
+  const awayFactor = awayAttack / leagueAway;
+  const homeConcedeFactor = homeDefense / leagueAway;
+  const awayConcedeFactor = awayDefense / leagueHome;
+
+  const expectedHome = Math.max(
+    0.05,
+    Math.min(
+      5,
+      leagueHome * homeFactor * awayConcedeFactor
+    )
+  );
+
+  const expectedAway = Math.max(
+    0.05,
+    Math.min(
+      5,
+      leagueAway * awayFactor * homeConcedeFactor
+    )
+  );
+
+  const scorelines: Array<{
+    home: number;
+    away: number;
+    probability: number;
+  }> = [];
+
+  let totalProbability = 0;
+  let pHome = 0;
+  let pDraw = 0;
+  let pAway = 0;
+  let pUnder25 = 0;
+
+  for (let h = 0; h <= 10; h++) {
+    for (let a = 0; a <= 10; a++) {
+      const probability =
+        bundesPoisson(expectedHome, h) *
+        bundesPoisson(expectedAway, a);
+
+      scorelines.push({
+        home: h,
+        away: a,
+        probability,
+      });
+
+      totalProbability += probability;
+
+      if (h > a) pHome += probability;
+      else if (h === a) pDraw += probability;
+      else pAway += probability;
+
+      if (h + a <= 2) pUnder25 += probability;
+    }
+  }
+
+  if (totalProbability <= 0) {
+    throw new Error("Distribusi probabilitas Bundesliga tidak valid.");
+  }
+
+  for (const score of scorelines) {
+    score.probability /= totalProbability;
+  }
+
+  pHome /= totalProbability;
+  pDraw /= totalProbability;
+  pAway /= totalProbability;
+  pUnder25 /= totalProbability;
+
+  scorelines.sort(
+    (a, b) => b.probability - a.probability
+  );
+
+  return {
+    available: true,
+    source: "bundesliga-match-stats.json",
+    method: "Venue-adjusted Independent Poisson with shrinkage",
+    league: "Fu\u00dfball-Bundesliga",
+    home,
+    away,
+    kickoff,
+    historyMatches: history.length,
+    homeVenueMatches: homeAtHome.length,
+    awayVenueMatches: awayAtAway.length,
+    expectedGoals: {
+      home: Number(expectedHome.toFixed(3)),
+      away: Number(expectedAway.toFixed(3)),
+    },
+    probabilities: {
+      home: Number(pHome.toFixed(6)),
+      draw: Number(pDraw.toFixed(6)),
+      away: Number(pAway.toFixed(6)),
+      under2_5Goals: Number(pUnder25.toFixed(6)),
+      total: Number((pHome + pDraw + pAway).toFixed(6)),
+    },
+    mostLikelyScore: scorelines[0],
+    topScores: scorelines.slice(0, 5),
+    note: "Estimasi statistik, bukan jaminan hasil pertandingan.",
+  };
+}
+
+function isBundesligaLeague(value: string): boolean {
+  const key = bundesNormalizeKey(value);
+
+  return (
+    key.includes("bundesliga") &&
+    !key.includes("uefa")
+  );
+}
+
 export async function POST(request: Request) {
   try {
     let body: Record<string, unknown>;
@@ -148,6 +500,45 @@ export async function POST(request: Request) {
       );
     }
 
+    // Bundesliga memakai dataset dan model historis khusus.
+    // Endpoint tetap sama: /api/pre-match.
+    if (isBundesligaLeague(league)) {
+      const bundesHome = bundesResolveTeam(home);
+      const bundesAway = bundesResolveTeam(away);
+
+      if (!bundesHome) {
+        return NextResponse.json(
+          {
+            error: "Nama tim kandang Bundesliga tidak ditemukan.",
+            input: home,
+            availableTeams: bundesTeamNames,
+          },
+          { status: 400 }
+        );
+      }
+
+      if (!bundesAway) {
+        return NextResponse.json(
+          {
+            error: "Nama tim tandang Bundesliga tidak ditemukan.",
+            input: away,
+            availableTeams: bundesTeamNames,
+          },
+          { status: 400 }
+        );
+      }
+
+      if (bundesHome === bundesAway) {
+        return NextResponse.json(
+          { error: "Tim kandang dan tandang harus berbeda." },
+          { status: 400 }
+        );
+      }
+
+      return NextResponse.json(
+        bundesPredict(bundesHome, bundesAway, kickoff)
+      );
+    }
     const dataFile = path.join(
       process.cwd(),
       "data",
@@ -277,8 +668,8 @@ export async function POST(request: Request) {
     let awayWin = 0;
     let under25 = 0;
 
-    for (let homeGoals = 0; homeGoals <= 8; homeGoals++) {
-      for (let awayGoals = 0; awayGoals <= 8; awayGoals++) {
+    for (let homeGoals = 0; homeGoals <= 20; homeGoals++) {
+      for (let awayGoals = 0; awayGoals <= 20; awayGoals++) {
         const probability =
           poisson(lambdaHome, homeGoals) *
           poisson(lambdaAway, awayGoals);

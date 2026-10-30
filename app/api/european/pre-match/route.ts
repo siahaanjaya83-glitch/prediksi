@@ -319,8 +319,8 @@ export async function POST(request: Request) {
     let awayWin = 0;
     let under25 = 0;
 
-    for (let homeGoals = 0; homeGoals <= 8; homeGoals++) {
-      for (let awayGoals = 0; awayGoals <= 8; awayGoals++) {
+    for (let homeGoals = 0; homeGoals <= 20; homeGoals++) {
+      for (let awayGoals = 0; awayGoals <= 20; awayGoals++) {
         const probability =
           poisson(lambdaHome, homeGoals) *
           poisson(lambdaAway, awayGoals);
